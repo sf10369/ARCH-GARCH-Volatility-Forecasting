@@ -1,0 +1,390 @@
+---
+title: "new_final_project"
+output:
+  html_document: default
+  pdf_document: default
+date: "2026-04-27"
+---
+
+---
+title: "Volatility Clustering in Financial Returns: An ARCH and GARCH Analysis"
+author: "Steve Fernandes"
+date: "`r Sys.Date()`"
+output:
+pdf_document:
+    toc: true
+    number_sections: true
+    fig_caption: true
+fontsize: 12pt
+geometry: margin=1in
+header-includes:
+  - \usepackage{setspace}
+  - \doublespacing
+  - \usepackage{float}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 7,
+  fig.height = 5.5
+)
+```
+
+# Introduction
+
+Financial markets often move through alternating periods of calm and turbulence. During calm periods, daily price changes are relatively small, while during turbulent periods, returns may experience large upward or downward movements. This behavior is known as volatility clustering, and it is one of the most important characteristics of financial time series. Unlike many traditional time series models that assume constant variance, financial return data usually has variance that changes over time. Because volatility is closely connected to financial risk, modeling volatility is important for investment decisions, portfolio management, risk management, and derivative pricing.
+
+This project studies volatility clustering in the S&P 500 index using ARCH and GARCH models. The S&P 500 is a broad market index that represents the performance of large publicly traded companies in the United States. Since raw price data usually trends over time and is not stationary, the analysis uses daily log returns instead of prices. The main goal is to determine whether volatility in financial returns changes over time and whether GARCH models can capture and forecast this changing risk.
+
+This project also connects directly to my interest in quantitative finance. In quantitative finance, mathematical and statistical tools are used to understand financial markets, measure risk, and support data-driven decisions. Volatility modeling is especially important because volatility is often treated as a measure of uncertainty or risk. By applying ARCH and GARCH models to real financial data, this project gives practical experience with a method that is widely used in financial risk modeling.
+
+# Objective and Purpose
+
+The objective of this project is to model and forecast time-varying volatility in financial returns using ARCH and GARCH models. Specifically, this project aims to:
+
+1.  Obtain daily S&P 500 price data.
+2.  Transform prices into log returns.
+3.  Explore the return series visually and statistically.
+4.  Test for ARCH effects.
+5.  Fit an ARCH(1) model and a GARCH(1,1) model.
+6.  Compare the models using information criteria.
+7.  Perform diagnostic checks on the fitted GARCH model.
+8.  Forecast future volatility.
+
+The purpose of the project is to show that financial return volatility is not constant over time. Instead, volatility tends to persist, meaning that high-volatility periods often follow high-volatility periods and low-volatility periods often follow low-volatility periods. This project demonstrates how GARCH-type models provide a more realistic way to model financial time series compared to models that assume constant variance.
+
+# Data Description
+
+The data used in this project consists of daily closing prices for the S&P 500 index from January 2018 through December 2025. The data is downloaded from Yahoo Finance using the `quantmod` package in R. The S&P 500 is chosen because it is one of the most commonly used indicators of overall U.S. stock market performance.
+
+Financial price series are usually non-stationary because they often contain long-term trends. For this reason, the analysis is performed on log returns rather than raw prices. Log returns are calculated as:
+
+$$
+r_t = \log(P_t) - \log(P_{t-1})
+$$
+
+where $P_t$ is the closing price at time $t$. Log returns are useful because they tend to fluctuate around a stable mean and are more appropriate for volatility modeling.
+
+```{r libraries}
+library(quantmod)
+library(rugarch)
+library(FinTS)
+library(knitr)
+```
+
+```{r data}
+getSymbols("^GSPC", from = "2018-01-01", to = "2025-12-31")
+
+price <- Cl(GSPC)
+
+returns <- diff(log(price))
+returns <- na.omit(returns)
+
+ret <- as.numeric(returns)
+```
+
+```{r data-summary}
+data_summary <- data.frame(
+  Item = c("Asset", "Source", "Start Date", "End Date", "Number of Return Observations"),
+  Description = c(
+    "S&P 500 Index",
+    "Yahoo Finance",
+    as.character(start(price)),
+    as.character(end(price)),
+    length(ret)
+  )
+)
+
+kable(data_summary, caption = "Summary of the Dataset")
+```
+
+# Exploratory Data Analysis
+
+The first step is to examine the S&P 500 closing price series. This helps show why returns are used instead of prices.
+
+```{r price-plot}
+plot(
+  price,
+  main = "S&P 500 Closing Prices",
+  ylab = "Price",
+  xlab = "Date"
+)
+```
+
+The price plot shows a clear long-term upward trend with sharp declines during periods of market stress. This confirms that the original price series is not stationary. Since time series models often require a more stable series, the price series is transformed into log returns.
+
+```{r return-plot}
+plot(
+  returns,
+  main = "S&P 500 Daily Log Returns",
+  ylab = "Log Returns",
+  xlab = "Date"
+)
+```
+
+The log return plot fluctuates around zero, which is more appropriate for modeling. However, the size of the fluctuations changes over time. Some periods have small daily movements, while other periods contain large spikes. This is visual evidence of volatility clustering.
+
+Volatility clustering means that large changes tend to be followed by large changes, and small changes tend to be followed by small changes. This is an important feature of financial data and provides the main motivation for using ARCH and GARCH models.
+
+```{r histogram}
+hist(
+  ret,
+  breaks = 50,
+  main = "Histogram of S&P 500 Log Returns",
+  xlab = "Log Returns"
+)
+```
+
+The histogram shows that most returns are close to zero, but there are also extreme positive and negative returns. This suggests that the return distribution has heavy tails, meaning extreme values occur more often than they would under a normal distribution. This is another common feature of financial time series.
+
+# Autocorrelation Analysis
+
+To understand the dependence structure of the return series, autocorrelation plots are used. First, the ACF of the raw log returns is examined.
+
+```{r acf-returns}
+acf(
+  ret,
+  main = "ACF of Log Returns"
+)
+```
+
+The ACF of log returns shows relatively little autocorrelation. This means that the returns themselves are not strongly predictable from past returns. This is common in financial markets because price changes are often difficult to predict directly.
+
+However, volatility may still be predictable. To examine this, the ACF of squared returns is plotted.
+
+```{r acf-squared}
+acf(
+  ret^2,
+  main = "ACF of Squared Log Returns"
+)
+```
+
+The ACF of squared returns shows strong autocorrelation at several lags. This is important because squared returns are often used as a proxy for volatility. Significant autocorrelation in squared returns indicates that volatility is dependent over time. This supports the idea that volatility is not constant and motivates the use of ARCH and GARCH models.
+
+# Testing for ARCH Effects
+
+Before fitting ARCH and GARCH models, an ARCH LM test is performed. The null hypothesis of the test is that there are no ARCH effects. If the p-value is small, we reject the null hypothesis and conclude that conditional heteroskedasticity is present.
+
+```{r arch-test}
+arch_test <- ArchTest(ret, lags = 12)
+arch_test
+```
+
+The ARCH test produces a very small p-value, less than 0.05. Therefore, we reject the null hypothesis of no ARCH effects. This provides statistical evidence that the variance of the return series changes over time. Since conditional heteroskedasticity is present, ARCH and GARCH models are appropriate for this dataset.
+
+# Methodology
+
+## ARCH Model
+
+The ARCH model was introduced to model time-varying volatility. In an ARCH model, the conditional variance depends on past squared shocks. A simple ARCH(1) model can be written as:
+
+$$
+r_t = \mu + \epsilon_t
+$$
+
+$$
+\epsilon_t = \sigma_t z_t
+$$
+
+$$
+\sigma_t^2 = \omega + \alpha_1 \epsilon_{t-1}^2
+$$
+
+Here, $r_t$ is the return at time $t$, $\mu$ is the mean return, $\epsilon_t$ is the innovation or shock, and $\sigma_t^2$ is the conditional variance. The parameter $\alpha_1$ measures how strongly past shocks affect current volatility.
+
+## GARCH Model
+
+The GARCH model extends the ARCH model by allowing current volatility to depend on both past shocks and past volatility. The GARCH(1,1) model is written as:
+
+$$
+\sigma_t^2 = \omega + \alpha_1 \epsilon_{t-1}^2 + \beta_1 \sigma_{t-1}^2
+$$
+
+In this model, $\alpha_1$ measures the effect of recent shocks, while $\beta_1$ measures the persistence of past volatility. The GARCH(1,1) model is commonly used in financial time series because it is simple but powerful. A large value of $\alpha_1 + \beta_1$ indicates that volatility is highly persistent.
+
+# Model Fitting
+
+## ARCH(1) Model
+
+The first model fitted is an ARCH(1) model. This model allows volatility to depend on the previous squared shock.
+
+```{r arch-model}
+spec_arch <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 0)),
+  mean.model = list(armaOrder = c(0, 0), include.mean = TRUE),
+  distribution.model = "norm"
+)
+
+fit_arch <- ugarchfit(spec = spec_arch, data = ret)
+
+fit_arch
+```
+
+The ARCH(1) model captures the effect of recent shocks on volatility. However, it does not include lagged volatility. This can be limiting because financial volatility often persists over time.
+
+## GARCH(1,1) Model
+
+The second model fitted is a GARCH(1,1) model. This model includes both past squared shocks and past conditional variance.
+
+```{r garch-model}
+spec_garch <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(0, 0), include.mean = TRUE),
+  distribution.model = "norm"
+)
+
+fit_garch <- ugarchfit(spec = spec_garch, data = ret)
+
+fit_garch
+```
+
+The GARCH(1,1) model is more flexible than the ARCH(1) model because it captures both the immediate impact of shocks and the persistence of volatility. In the fitted model, the alpha parameter measures the effect of recent shocks, while the beta parameter measures the effect of past volatility.
+
+```{r garch-coefficients}
+garch_coef <- coef(fit_garch)
+
+coef_table <- data.frame(
+  Parameter = names(garch_coef),
+  Estimate = round(as.numeric(garch_coef), 6)
+)
+
+kable(coef_table, caption = "Estimated Parameters for the GARCH(1,1) Model")
+```
+
+```{r persistence}
+alpha1 <- coef(fit_garch)["alpha1"]
+beta1 <- coef(fit_garch)["beta1"]
+persistence <- alpha1 + beta1
+
+persistence_table <- data.frame(
+  Quantity = c("alpha1", "beta1", "alpha1 + beta1"),
+  Value = round(c(alpha1, beta1, persistence), 6)
+)
+
+kable(persistence_table, caption = "Volatility Persistence in the GARCH(1,1) Model")
+```
+
+The sum of $\alpha_1$ and $\beta_1$ is close to one. This indicates strong volatility persistence. In financial terms, this means that shocks to volatility do not disappear immediately. Instead, they continue to influence future volatility for some time.
+
+# Model Comparison
+
+To compare the ARCH(1) and GARCH(1,1) models, information criteria are used. Lower values of AIC and BIC indicate a better model fit.
+
+```{r model-comparison}
+arch_ic <- infocriteria(fit_arch)
+garch_ic <- infocriteria(fit_garch)
+
+comparison_table <- data.frame(
+  Criterion = rownames(arch_ic),
+  ARCH_1 = round(as.numeric(arch_ic), 6),
+  GARCH_1_1 = round(as.numeric(garch_ic), 6)
+)
+
+kable(comparison_table, caption = "Information Criteria for ARCH(1) and GARCH(1,1)")
+```
+
+The GARCH(1,1) model has lower AIC and BIC values than the ARCH(1) model. This indicates that the GARCH(1,1) model provides a better fit to the data. The improvement suggests that including lagged volatility is important for modeling financial return volatility.
+
+# Diagnostic Checking
+
+After fitting the GARCH(1,1) model, diagnostic checks are performed using the standardized residuals. If the model has captured the volatility structure well, then the standardized residuals and squared standardized residuals should show little remaining autocorrelation.
+
+```{r residuals}
+res_garch <- residuals(fit_garch, standardize = TRUE)
+
+res_garch_xts <- xts(as.numeric(res_garch), order.by = index(returns))
+
+plot(
+  res_garch_xts,
+  main = "Standardized Residuals from GARCH(1,1)",
+  ylab = "Standardized Residuals",
+  xlab = "Date"
+)
+```
+
+The standardized residuals fluctuate around zero and do not show strong visible patterns. This suggests that the model has removed much of the structure in the original returns.
+
+```{r acf-standardized-residuals}
+acf(
+  as.numeric(res_garch),
+  main = "ACF of Standardized Residuals"
+)
+```
+
+The ACF of the standardized residuals shows little remaining autocorrelation. This suggests that the mean structure is adequately modeled.
+
+```{r acf-squared-standardized-residuals}
+acf(
+  as.numeric(res_garch)^2,
+  main = "ACF of Squared Standardized Residuals"
+)
+```
+
+The ACF of squared standardized residuals shows much less autocorrelation compared to the ACF of the original squared returns. This indicates that the GARCH model successfully captured much of the time-varying volatility in the data.
+
+# Volatility Forecasting
+
+The fitted GARCH(1,1) model is used to forecast volatility over the next 20 periods. The forecasted conditional standard deviation is used as the volatility forecast.
+
+```{r forecast}
+garch_forecast <- ugarchforecast(fit_garch, n.ahead = 20)
+
+garch_forecast
+```
+
+```{r forecast-table}
+forecast_sigma <- as.numeric(sigma(garch_forecast))
+
+forecast_table <- data.frame(
+  Horizon = 1:20,
+  Forecasted_Sigma = round(forecast_sigma, 6)
+)
+
+kable(forecast_table, caption = "20-Period Ahead Volatility Forecast")
+```
+
+```{r forecast-plot}
+plot(
+  1:20,
+  forecast_sigma,
+  type = "l",
+  main = "20-Period Ahead GARCH Volatility Forecast",
+  xlab = "Forecast Horizon",
+  ylab = "Forecasted Conditional Sigma"
+)
+```
+
+The volatility forecast shows how the model expects risk to evolve in the short term. Since the GARCH model includes both recent shocks and past volatility, the forecast reflects the persistence of market volatility. In this analysis, the forecasted volatility gradually changes over the forecast horizon, showing that current market conditions continue to influence future risk.
+
+# Discussion of Results
+
+The exploratory analysis showed several important features of financial returns. First, the S&P 500 price series displayed a long-term trend, which made it unsuitable for direct volatility modeling. After transforming prices into log returns, the series became centered around zero. However, the magnitude of return fluctuations changed over time, suggesting volatility clustering.
+
+The ACF of returns showed little autocorrelation, which indicates that returns themselves are not strongly predictable from past returns. In contrast, the ACF of squared returns showed significant autocorrelation, suggesting that volatility has memory. This is a key reason why ARCH and GARCH models are useful for financial time series.
+
+The ARCH test strongly rejected the null hypothesis of no ARCH effects. This confirmed the presence of conditional heteroskedasticity and justified the use of volatility models. The ARCH(1) model captured the effect of recent shocks, but the GARCH(1,1) model performed better because it also included past volatility.
+
+The information criteria showed that the GARCH(1,1) model was preferred over the ARCH(1) model. The estimated GARCH parameters also showed strong volatility persistence, with $\alpha_1 + \beta_1$ close to one. This means that volatility shocks tend to persist over time rather than disappearing immediately.
+
+The residual diagnostics supported the adequacy of the GARCH(1,1) model. Compared to the original squared returns, the squared standardized residuals showed much less autocorrelation. This suggests that the model captured much of the volatility structure in the data.
+
+# Limitations and Extensions
+
+One limitation of the standard GARCH(1,1) model is that it treats positive and negative shocks symmetrically. In real financial markets, negative shocks often have a stronger effect on future volatility than positive shocks of the same size. This is known as the leverage effect. Since the standard GARCH model does not directly account for this asymmetry, it may not fully capture how markets respond to bad news.
+
+Another limitation is the assumption of normally distributed errors. Financial returns often have heavy tails, meaning extreme events occur more often than expected under a normal distribution. A model with Student's t-distributed errors may better capture these extreme values.
+
+A possible extension of this project would be to fit EGARCH or GJR-GARCH models. These models allow volatility to respond differently to positive and negative shocks. Another extension would be to compare the S&P 500 with a more volatile asset, such as Bitcoin, to see whether GARCH models behave differently across different types of financial markets.
+
+# Conclusion
+
+This project analyzed volatility clustering in S&P 500 returns using ARCH and GARCH models. The results showed that the price series was non-stationary, while the log return series fluctuated around zero and exhibited volatility clustering. The ACF of squared returns and the ARCH test provided strong evidence of conditional heteroskedasticity.
+
+The ARCH(1) and GARCH(1,1) models were fitted to the return series. Based on information criteria, the GARCH(1,1) model provided a better fit than the ARCH(1) model. The GARCH parameters indicated strong volatility persistence, which is consistent with the behavior of financial markets.
+
+The diagnostic checks showed that the GARCH model captured much of the volatility dependence in the data. Finally, the model was used to forecast future volatility, demonstrating its usefulness for short-term financial risk forecasting.
+
+Overall, this project shows that GARCH models are effective tools for modeling and forecasting time-varying volatility in financial returns. This is especially relevant to quantitative finance, where volatility modeling plays a central role in risk management, portfolio construction, and financial decision-making.
